@@ -113,10 +113,12 @@ h1, h2, h3, .display {
   background: var(--cream-deep);
   color: var(--cherry-dark);
 }
-.pill.status-aprovado { background: #FDEBD3; color: #8A5A1E; }
+.pill.status-online { background: #E9EEF5; color: #3E5C82; }
+.pill.status-aprovando { background: #FDEBD3; color: #8A5A1E; }
 .pill.status-preparar { background: #FCE4E9; color: var(--cherry-dark); }
 .pill.status-pronto { background: #E4EEE0; color: var(--success); }
-.pill.status-entregue { background: #DCEAF5; color: #2E5E85; }
+.pill.status-enviando { background: #DCEAF5; color: #2E5E85; }
+.pill.status-entregue { background: #D7EFE4; color: #1F7A5C; }
 
 .profit-positive { color: var(--success); }
 .profit-negative { color: var(--danger); }
@@ -241,7 +243,15 @@ h1, h2, h3, .display {
   margin-bottom: 8px;
 }
 .item-line select { flex: 2; }
-.item-line input { flex: 1; }
+.item-line input { flex: 1; min-width: 0; }
+.item-line .line-qtd-hint {
+  flex: 0 0 auto;
+  min-width: 52px;
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  text-align: right;
+  white-space: nowrap;
+}
 .item-line .remove-line { color: var(--danger); background: none; border: none; font-size: 1.1rem; cursor: pointer; padding: 6px; }
 
 .modal-actions {
@@ -313,3 +323,27 @@ table.mini td {
 /* -------- menu dropdown -------- */
 .menu-sheet .card { cursor: pointer; }
 .menu-sheet .card:active { background: var(--cream-deep); }
+
+/* -------- documento para impressão (resumo do cliente) -------- */
+#print-area { display: none; }
+@media print {
+  body.printing > *:not(#print-area) { display: none !important; }
+  body.printing #print-area {
+    display: block !important;
+    padding: 24px;
+    color: #2A1414;
+    font-family: Georgia, "Times New Roman", serif;
+  }
+  .doc-header { margin-bottom: 18px; }
+  .doc-header h1 { color: var(--cherry-dark); font-size: 1.6rem; margin: 0 0 2px; }
+  .doc-header p { margin: 0; color: #6b4a4a; font-size: 0.95rem; }
+  .doc-info { border-collapse: collapse; margin-bottom: 16px; }
+  .doc-info td { padding: 3px 10px 3px 0; font-size: 0.92rem; }
+  .doc-info td:first-child { color: #6b4a4a; }
+  .doc-items { width: 100%; border-collapse: collapse; margin: 12px 0; }
+  .doc-items th, .doc-items td { border-bottom: 1px solid #ddd; padding: 8px 6px; text-align: left; font-size: 0.92rem; }
+  .doc-items th:last-child, .doc-items td:last-child { text-align: right; }
+  .doc-items tfoot td { font-weight: bold; border-top: 2px solid var(--cherry-dark); border-bottom: none; }
+  .doc-obs { font-size: 0.88rem; margin-top: 14px; }
+  .doc-footer { margin-top: 28px; font-style: italic; color: #6b4a4a; text-align: center; }
+}

@@ -122,8 +122,8 @@ async function resumoCustos() {
 
 async function custoOrcamento(orcamento) {
   const resumo = await resumoCustos();
-  let custoTotal = 0;
-  let vendaTotal = 0;
+  let custoItens = 0;
+  let vendaItens = 0;
   const itensCalc = (orcamento.itens || []).map((item) => {
     const r = resumo.find((x) => x.id === item.receitaId);
     const custoUnit = r ? r.custoPorcao : 0;
@@ -131,11 +131,21 @@ async function custoOrcamento(orcamento) {
     const qtd = Number(item.quantidade) || 0;
     const custo = custoUnit * qtd;
     const venda = vendaUnit * qtd;
-    custoTotal += custo;
-    vendaTotal += venda;
+    custoItens += custo;
+    vendaItens += venda;
     return { ...item, nome: r ? r.nome : "(receita removida)", custoUnit, vendaUnit, qtd, custo, venda };
   });
-  return { itensCalc, custoTotal, vendaTotal, lucro: vendaTotal - custoTotal };
+  const embalagem = Number(orcamento.custoEmbalagem) || 0;
+  const frete = Number(orcamento.custoFrete) || 0;
+  // embalagem/frete entram tanto no custo quanto no valor cobrado do cliente
+  // (repasse direto) — se quiser ganhar em cima do frete, é só informar um
+  // valor de frete maior do que o custo real.
+  const custoTotal = custoItens + embalagem + frete;
+  const vendaTotal = vendaItens + embalagem + frete;
+  const lucro = vendaTotal - custoTotal;
+  const valorPago = Number(orcamento.valorPago) || 0;
+  const saldoDevedor = vendaTotal - valorPago;
+  return { itensCalc, custoItens, vendaItens, embalagem, frete, custoTotal, vendaTotal, lucro, valorPago, saldoDevedor };
 }
 
 async function balancoGeral() {
@@ -146,6 +156,7 @@ async function balancoGeral() {
     linhas.push({
       id: o.id, data: o.data, cliente: o.cliente, status: o.status,
       custoTotal: calc.custoTotal, vendaTotal: calc.vendaTotal, lucro: calc.lucro,
+      valorPago: calc.valorPago, saldoDevedor: calc.saldoDevedor,
     });
   }
   return linhas;

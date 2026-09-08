@@ -31,6 +31,17 @@ function fmtDate(d) {
   if (!y) return d;
   return `${day}/${m}/${y}`;
 }
+function fmtQtd(n, unidade) {
+  const rounded = Math.round((Number(n) || 0) * 100) / 100;
+  return `${rounded.toLocaleString("pt-BR", { maximumFractionDigits: 2 })} ${unidade || ""}`.trim();
+}
+function linkify(escapedText) {
+  const urlRegex = /((https?:\/\/|www\.)[^\s<]+)/g;
+  return escapedText.replace(urlRegex, (match) => {
+    const href = match.startsWith("http") ? match : `https://${match}`;
+    return `<a href="${href}" target="_blank" rel="noopener noreferrer" style="color:var(--cherry-dark);text-decoration:underline;word-break:break-all">${match}</a>`;
+  });
+}
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
@@ -207,7 +218,7 @@ function formIngrediente(existing) {
    ========================================================= */
 async function renderReceitas() {
   const lista = await DB.receitas.list();
-  let html = `<h2 class="section-title">Receitas</h2><p class="section-sub">Toque em uma receita para ver o custo detalhado</p>`;
+  let html = `<h2 class="section-title">Receitas</h2><p class="section-sub">Toque em "Ver" para abrir o modo de preparo, sem valores</p>`;
   if (lista.length === 0) {
     html += `<div class="empty"><span class="emoji">📖</span>Nenhuma receita cadastrada ainda.<br>Cadastre os ingredientes primeiro, depois toque em + aqui.</div>`;
   } else {
@@ -225,6 +236,7 @@ async function renderReceitas() {
           </div>
           <div class="card-meta" style="margin-top:6px">Lucro por porção: <strong class="${cls}">${fmtMoney(calc.lucroPorcao)}</strong></div>
           <div class="card-actions">
+            <button class="btn btn-secondary btn-sm" data-view="${r.id}">Ver receita</button>
             <button class="btn btn-ghost btn-sm" data-edit="${r.id}">Editar</button>
             <button class="btn btn-danger btn-sm" data-del="${r.id}">Excluir</button>
           </div>
@@ -234,15 +246,49 @@ async function renderReceitas() {
   appEl.innerHTML = html + `<button class="fab" id="fab-add" aria-label="Adicionar receita">+</button>`;
 
   document.getElementById("fab-add").onclick = async () => formReceita();
+  appEl.querySelectorAll("[data-view]").forEach((b) => b.onclick = () => viewReceita(b.dataset.view));
   appEl.querySelectorAll("[data-edit]").forEach((b) => b.onclick = async () => formReceita(await DB.receitas.get(b.dataset.edit)));
   appEl.querySelectorAll("[data-del]").forEach((b) => b.onclick = () => confirmDelete("receita", async () => {
     await DB.receitas.remove(b.dataset.del); render();
   }));
 }
 
+async function viewReceita(id) {
+  const r = await DB.receitas.get(id);
+  if (!r) { toast("Receita não encontrada"); return; }
+  const todosIngredientes = await DB.ingredientes.list();
+  const linhas = (r.itens || []).map((it) => {
+    const ing = todosIngredientes.find((i) => i.id === it.ingredienteId);
+    const qtd = ing ? (Number(ing.quantidade) || 0) * (Number(it.percentual) || 0) / 100 : 0;
+    return { nome: ing ? ing.nome : "(ingrediente removido)", qtd, unidade: ing ? ing.unidade : "" };
+  });
+
+  openModal(`
+    <h2 class="modal-title">${esc(r.nome)}</h2>
+    <p class="card-meta">${r.porcoes ? `${r.porcoes} porções` : ""}${r.tempoPreparo ? ` · ${esc(r.tempoPreparo)}` : ""}</p>
+
+    <div class="card" style="margin-top:12px">
+      <div class="card-title" style="margin-bottom:8px">Ingredientes</div>
+      ${linhas.length
+        ? linhas.map((l) => `<div class="card-row" style="padding:4px 0"><span>${esc(l.nome)}</span><strong>${fmtQtd(l.qtd, l.unidade)}</strong></div>`).join("")
+        : `<p class="card-meta">Nenhum ingrediente cadastrado nesta receita.</p>`}
+    </div>
+
+    ${r.modoPreparo ? `
+    <div class="card" style="margin-top:10px">
+      <div class="card-title" style="margin-bottom:8px">Modo de preparo</div>
+      <div style="white-space:pre-wrap;font-size:0.92rem;line-height:1.55">${linkify(esc(r.modoPreparo))}</div>
+    </div>` : ""}
+
+    <div class="modal-actions">
+      <button class="btn btn-primary btn-block" id="view-close">Fechar</button>
+    </div>
+  `, () => { document.getElementById("view-close").onclick = closeModal; });
+}
+
 async function formReceita(existing) {
   const isEdit = !!existing;
-  const ingredientes = await DB.ingredientes.list();
+  const ingredientes = (await DB.ingredientes.list()).sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
   if (ingredientes.length === 0) {
     toast("Cadastre ao menos um ingrediente primeiro");
     return;
@@ -255,6 +301,7 @@ async function formReceita(existing) {
       <div class="item-line" data-line="${idx}">
         <select class="line-ing"><option value="">Selecione...</option>${options}</select>
         <input class="line-pct" type="number" step="any" placeholder="% usado" value="${item.percentual ?? ""}">
+        <span class="line-qtd-hint"></span>
         <button type="button" class="remove-line" title="Remover">✕</button>
       </div>`;
   }
@@ -264,6 +311,7 @@ async function formReceita(existing) {
     <div class="field"><label>Nome da receita</label><input id="f-nome" value="${esc(existing?.nome ?? "")}" placeholder="Ex: Brigadeiro Gourmet"></div>
 
     <label style="font-size:0.78rem;font-weight:600;color:var(--cherry-dark)">Ingredientes usados</label>
+    <p class="section-sub" style="margin:2px 0 6px">Informe o % do pacote usado — a quantidade aparece calculada ao lado</p>
     <div id="lines" style="margin-top:6px">${itensIniciais.map(lineHTML).join("")}</div>
     <button type="button" class="btn btn-secondary btn-sm" id="add-line" style="margin-bottom:12px">+ ingrediente</button>
 
@@ -273,7 +321,7 @@ async function formReceita(existing) {
       <div class="field"><label>Preço de venda/unid. (R$)</label><input id="f-venda" type="number" step="any" value="${existing?.precoVenda ?? ""}"></div>
     </div>
     <div class="field"><label>Tempo de preparo</label><input id="f-tempo" value="${esc(existing?.tempoPreparo ?? "")}" placeholder="Ex: 45 minutos"></div>
-    <div class="field"><label>Modo de preparo</label><textarea id="f-modo" placeholder="Passo a passo...">${esc(existing?.modoPreparo ?? "")}</textarea></div>
+    <div class="field"><label>Modo de preparo</label><textarea id="f-modo" placeholder="Passo a passo... (links colados aqui ficam clicáveis na visualização)">${esc(existing?.modoPreparo ?? "")}</textarea></div>
 
     <div class="card" id="preview-card" style="background:var(--cream-deep)">
       <div class="card-row"><span>Custo total estimado</span><strong id="preview-total">R$ 0,00</strong></div>
@@ -287,12 +335,21 @@ async function formReceita(existing) {
   `, () => {
     const linesEl = document.getElementById("lines");
 
+    function refreshLineHint(line) {
+      const ing = ingredientes.find((i) => i.id === line.querySelector(".line-ing").value);
+      const pct = parseFloat(line.querySelector(".line-pct").value) || 0;
+      const hint = line.querySelector(".line-qtd-hint");
+      hint.textContent = ing ? fmtQtd((Number(ing.quantidade) || 0) * pct / 100, ing.unidade) : "";
+    }
     function bindLineEvents() {
       linesEl.querySelectorAll(".remove-line").forEach((btn) => {
         btn.onclick = () => { btn.closest(".item-line").remove(); updatePreview(); };
       });
-      linesEl.querySelectorAll(".line-ing, .line-pct").forEach((el) => {
-        el.oninput = updatePreview;
+      linesEl.querySelectorAll(".item-line").forEach((line) => {
+        line.querySelectorAll(".line-ing, .line-pct").forEach((el) => {
+          el.oninput = () => { refreshLineHint(line); updatePreview(); };
+        });
+        refreshLineHint(line);
       });
     }
     function updatePreview() {
@@ -382,7 +439,7 @@ async function renderResumo() {
 /* =========================================================
    ORÇAMENTOS
    ========================================================= */
-const STATUS_OPTS = ["Aprovado", "Preparar", "Pronto", "Entregue"];
+const STATUS_OPTS = ["Online", "Aprovando", "Preparar", "Pronto", "Enviando", "Entregue"];
 
 async function renderOrcamentos() {
   const lista = await DB.orcamentos.list();
@@ -394,7 +451,8 @@ async function renderOrcamentos() {
   } else {
     for (const o of lista) {
       const calc = await DB.custoOrcamento(o);
-      const statusClass = "status-" + (o.status || "aprovado").toLowerCase();
+      const statusClass = "status-" + (o.status || "online").toLowerCase();
+      const saldoCls = calc.saldoDevedor > 0.005 ? "profit-negative" : "profit-positive";
       html += `
         <div class="card">
           <div class="card-row">
@@ -402,13 +460,18 @@ async function renderOrcamentos() {
               <div class="card-title">${esc(o.cliente || "(sem nome)")}</div>
               <div class="card-meta">${fmtDate(o.data)}</div>
             </div>
-            <span class="pill ${statusClass}">${esc(o.status || "Aprovado")}</span>
+            <span class="pill ${statusClass}">${esc(o.status || "Online")}</span>
           </div>
           <div class="card-row" style="margin-top:8px">
-            <span class="card-meta">Custo ${fmtMoney(calc.custoTotal)} · Venda ${fmtMoney(calc.vendaTotal)}</span>
+            <span class="card-meta">Total ${fmtMoney(calc.vendaTotal)}</span>
             <span class="card-value" style="font-size:0.95rem">Lucro ${fmtMoney(calc.lucro)}</span>
           </div>
+          <div class="card-row" style="margin-top:2px">
+            <span class="card-meta">Pago ${fmtMoney(calc.valorPago)}</span>
+            <span class="${saldoCls}" style="font-size:0.85rem;font-weight:600">Falta ${fmtMoney(calc.saldoDevedor)}</span>
+          </div>
           <div class="card-actions">
+            <button class="btn btn-secondary btn-sm" data-view="${o.id}">Ver resumo</button>
             <button class="btn btn-ghost btn-sm" data-edit="${o.id}">Editar</button>
             <button class="btn btn-danger btn-sm" data-del="${o.id}">Excluir</button>
           </div>
@@ -418,6 +481,7 @@ async function renderOrcamentos() {
   appEl.innerHTML = html + `<button class="fab" id="fab-add" aria-label="Adicionar orçamento">+</button>`;
 
   document.getElementById("fab-add").onclick = () => formOrcamento();
+  appEl.querySelectorAll("[data-view]").forEach((b) => b.onclick = () => viewOrcamento(b.dataset.view));
   appEl.querySelectorAll("[data-edit]").forEach((b) => b.onclick = async () => formOrcamento(await DB.orcamentos.get(b.dataset.edit)));
   appEl.querySelectorAll("[data-del]").forEach((b) => b.onclick = () => confirmDelete("orçamento", async () => {
     await DB.orcamentos.remove(b.dataset.del); render();
@@ -426,7 +490,7 @@ async function renderOrcamentos() {
 
 async function formOrcamento(existing) {
   const isEdit = !!existing;
-  const receitas = await DB.receitas.list();
+  const receitas = (await DB.receitas.list()).sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
   if (receitas.length === 0) {
     toast("Cadastre ao menos uma receita primeiro");
     return;
@@ -452,17 +516,25 @@ async function formOrcamento(existing) {
       <div class="field"><label>Data</label><input id="f-data" type="date" value="${existing?.data ?? new Date().toISOString().slice(0,10)}"></div>
     </div>
     <div class="field"><label>Status do pedido</label>
-      <select id="f-status">${STATUS_OPTS.map(s => `<option ${existing?.status===s?"selected":""}>${s}</option>`).join("")}</select>
+      <select id="f-status">${STATUS_OPTS.map(s => `<option ${(existing?.status ?? "Online")===s?"selected":""}>${s}</option>`).join("")}</select>
     </div>
 
     <label style="font-size:0.78rem;font-weight:600;color:var(--cherry-dark)">Itens do pedido</label>
     <div id="lines" style="margin-top:6px">${itensIniciais.map(lineHTML).join("")}</div>
     <button type="button" class="btn btn-secondary btn-sm" id="add-line" style="margin-bottom:12px">+ item</button>
 
+    <div class="field-row">
+      <div class="field"><label>Custo de embalagem (R$)</label><input id="f-embalagem" type="number" step="any" value="${existing?.custoEmbalagem ?? 0}"></div>
+      <div class="field"><label>Custo de frete (R$)</label><input id="f-frete" type="number" step="any" value="${existing?.custoFrete ?? 0}"></div>
+    </div>
+    <div class="field"><label>Valor já pago (R$)</label><input id="f-pago" type="number" step="any" value="${existing?.valorPago ?? 0}"></div>
+    <div class="field"><label>Observações</label><textarea id="f-obs" placeholder="Detalhes do pedido, restrições, combinados...">${esc(existing?.observacoes ?? "")}</textarea></div>
+
     <div class="card" id="preview-card" style="background:var(--cream-deep)">
       <div class="card-row"><span>Custo total</span><strong id="preview-custo">R$ 0,00</strong></div>
-      <div class="card-row"><span>Venda total</span><strong id="preview-venda">R$ 0,00</strong></div>
+      <div class="card-row"><span>Valor total (com frete/embalagem)</span><strong id="preview-venda">R$ 0,00</strong></div>
       <div class="card-row"><span>Lucro</span><strong id="preview-lucro">R$ 0,00</strong></div>
+      <div class="card-row"><span>Falta pagar</span><strong id="preview-saldo">R$ 0,00</strong></div>
     </div>
 
     <div class="modal-actions">
@@ -484,14 +556,23 @@ async function formOrcamento(existing) {
         const r = resumo.find((x) => x.id === id);
         if (r) { custo += r.custoPorcao * qtd; venda += r.precoVenda * qtd; }
       });
+      const embalagem = parseFloat(document.getElementById("f-embalagem").value) || 0;
+      const frete = parseFloat(document.getElementById("f-frete").value) || 0;
+      custo += embalagem + frete;
+      venda += embalagem + frete;
+      const pago = parseFloat(document.getElementById("f-pago").value) || 0;
       document.getElementById("preview-custo").textContent = fmtMoney(custo);
       document.getElementById("preview-venda").textContent = fmtMoney(venda);
       document.getElementById("preview-lucro").textContent = fmtMoney(venda - custo);
+      document.getElementById("preview-saldo").textContent = fmtMoney(venda - pago);
     }
     document.getElementById("add-line").onclick = () => {
       linesEl.insertAdjacentHTML("beforeend", lineHTML({ receitaId: "", quantidade: "" }));
       bindLineEvents();
     };
+    document.getElementById("f-embalagem").oninput = updatePreview;
+    document.getElementById("f-frete").oninput = updatePreview;
+    document.getElementById("f-pago").oninput = updatePreview;
     bindLineEvents();
     updatePreview();
 
@@ -512,6 +593,10 @@ async function formOrcamento(existing) {
         data: document.getElementById("f-data").value,
         status: document.getElementById("f-status").value,
         itens,
+        custoEmbalagem: parseFloat(document.getElementById("f-embalagem").value) || 0,
+        custoFrete: parseFloat(document.getElementById("f-frete").value) || 0,
+        valorPago: parseFloat(document.getElementById("f-pago").value) || 0,
+        observacoes: document.getElementById("f-obs").value.trim(),
       };
       if (isEdit) await DB.orcamentos.update(existing.id, payload);
       else await DB.orcamentos.create(payload);
@@ -519,6 +604,83 @@ async function formOrcamento(existing) {
     };
   });
 }
+
+async function viewOrcamento(id) {
+  const o = await DB.orcamentos.get(id);
+  if (!o) { toast("Orçamento não encontrado"); return; }
+  const calc = await DB.custoOrcamento(o);
+  const saldoCls = calc.saldoDevedor > 0.005 ? "profit-negative" : "profit-positive";
+
+  openModal(`
+    <h2 class="modal-title">Resumo do orçamento</h2>
+    <div class="card">
+      <div class="card-row">
+        <div>
+          <div class="card-title">${esc(o.cliente || "")}</div>
+          <div class="card-meta">${esc(o.endereco || "")}</div>
+          <div class="card-meta">${esc(o.telefone || "")}${o.telefone ? " · " : ""}${fmtDate(o.data)}</div>
+        </div>
+        <span class="pill status-${(o.status||"online").toLowerCase()}">${esc(o.status || "Online")}</span>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:10px">
+      <div class="card-title" style="margin-bottom:6px">Itens</div>
+      ${calc.itensCalc.map((i) => `<div class="card-row" style="padding:4px 0"><span>${esc(i.nome)} × ${i.qtd}</span><strong>${fmtMoney(i.venda)}</strong></div>`).join("") || `<p class="card-meta">Nenhum item</p>`}
+      <div class="card-row" style="padding:8px 0 4px;border-top:1px solid var(--line);margin-top:6px"><span>Embalagem + Frete</span><strong>${fmtMoney(calc.embalagem + calc.frete)}</strong></div>
+      <div class="card-row" style="padding-top:4px"><span><strong>Valor Total</strong></span><strong>${fmtMoney(calc.vendaTotal)}</strong></div>
+      <div class="card-row" style="padding-top:8px"><span>Pago</span><strong>${fmtMoney(calc.valorPago)}</strong></div>
+      <div class="card-row"><span>Falta pagar</span><strong class="${saldoCls}">${fmtMoney(calc.saldoDevedor)}</strong></div>
+    </div>
+
+    ${o.observacoes ? `<div class="card" style="margin-top:10px"><div class="card-title" style="margin-bottom:6px">Observações</div><div style="white-space:pre-wrap;font-size:0.9rem">${esc(o.observacoes)}</div></div>` : ""}
+
+    <div class="card" style="margin-top:10px;background:var(--cream-deep)">
+      <div class="card-row"><span>Custo total (interno)</span><strong>${fmtMoney(calc.custoTotal)}</strong></div>
+      <div class="card-row"><span>Lucro (interno)</span><strong>${fmtMoney(calc.lucro)}</strong></div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="view-close">Fechar</button>
+      <button class="btn btn-primary" id="gerar-doc">Gerar documento p/ cliente</button>
+    </div>
+  `, () => {
+    document.getElementById("view-close").onclick = closeModal;
+    document.getElementById("gerar-doc").onclick = () => gerarDocumentoCliente(o, calc);
+  });
+}
+
+function gerarDocumentoCliente(o, calc) {
+  let printArea = document.getElementById("print-area");
+  if (!printArea) {
+    printArea = document.createElement("div");
+    printArea.id = "print-area";
+    document.body.appendChild(printArea);
+  }
+  printArea.innerHTML = `
+    <div class="doc-header">
+      <h1>🍒 La Cerise</h1>
+      <p>Resumo do pedido</p>
+    </div>
+    <table class="doc-info">
+      <tr><td>Cliente</td><td>${esc(o.cliente || "")}</td></tr>
+      <tr><td>Data</td><td>${fmtDate(o.data)}</td></tr>
+    </table>
+    <table class="doc-items">
+      <thead><tr><th>Item</th><th>Qtd</th><th>Valor</th></tr></thead>
+      <tbody>
+        ${calc.itensCalc.map((i) => `<tr><td>${esc(i.nome)}</td><td>${i.qtd}</td><td>${fmtMoney(i.venda)}</td></tr>`).join("")}
+        <tr><td colspan="2">Embalagem / Frete</td><td>${fmtMoney(calc.embalagem + calc.frete)}</td></tr>
+      </tbody>
+      <tfoot><tr><td colspan="2">Valor Total</td><td>${fmtMoney(calc.vendaTotal)}</td></tr></tfoot>
+    </table>
+    ${o.observacoes ? `<p class="doc-obs"><strong>Observações:</strong> ${esc(o.observacoes)}</p>` : ""}
+    <p class="doc-footer">La Cerise — obrigado pela preferência! 🍒</p>
+  `;
+  document.body.classList.add("printing");
+  window.print();
+}
+window.addEventListener("afterprint", () => document.body.classList.remove("printing"));
 
 /* =========================================================
    BALANÇO GERAL
@@ -533,13 +695,17 @@ async function renderBalanco() {
     const totalCusto = linhas.reduce((s, l) => s + l.custoTotal, 0);
     const totalVenda = linhas.reduce((s, l) => s + l.vendaTotal, 0);
     const totalLucro = linhas.reduce((s, l) => s + l.lucro, 0);
+    const totalRecebido = linhas.reduce((s, l) => s + l.valorPago, 0);
+    const totalPendente = linhas.reduce((s, l) => s + l.saldoDevedor, 0);
     html += `
       <div class="stat-grid">
         <div class="stat-card"><div class="label">Total vendido</div><div class="value">${fmtMoney(totalVenda)}</div></div>
         <div class="stat-card"><div class="label">Lucro total</div><div class="value">${fmtMoney(totalLucro)}</div></div>
+        <div class="stat-card"><div class="label">Recebido</div><div class="value">${fmtMoney(totalRecebido)}</div></div>
+        <div class="stat-card"><div class="label">A receber</div><div class="value">${fmtMoney(totalPendente)}</div></div>
       </div>
       <div class="table-wrap"><table class="mini">
-        <thead><tr><th>Data</th><th>Cliente</th><th>Custo</th><th>Venda</th><th>Lucro</th><th>Status</th></tr></thead>
+        <thead><tr><th>Data</th><th>Cliente</th><th>Custo</th><th>Venda</th><th>Lucro</th><th>Recebido</th><th>A receber</th><th>Status</th></tr></thead>
         <tbody>
         ${linhas.sort((a,b)=>(b.data||"").localeCompare(a.data||"")).map((l) => `
           <tr>
@@ -548,10 +714,20 @@ async function renderBalanco() {
             <td>${fmtMoney(l.custoTotal)}</td>
             <td>${fmtMoney(l.vendaTotal)}</td>
             <td class="${l.lucro >= 0 ? "profit-positive" : "profit-negative"}">${fmtMoney(l.lucro)}</td>
+            <td>${fmtMoney(l.valorPago)}</td>
+            <td class="${l.saldoDevedor > 0.005 ? "profit-negative" : "profit-positive"}">${fmtMoney(l.saldoDevedor)}</td>
             <td><span class="pill status-${(l.status||"").toLowerCase()}">${esc(l.status||"")}</span></td>
           </tr>`).join("")}
         </tbody>
-        <tfoot><tr><td colspan="2"><strong>Totais</strong></td><td><strong>${fmtMoney(totalCusto)}</strong></td><td><strong>${fmtMoney(totalVenda)}</strong></td><td><strong>${fmtMoney(totalLucro)}</strong></td><td></td></tr></tfoot>
+        <tfoot><tr>
+          <td colspan="2"><strong>Totais</strong></td>
+          <td><strong>${fmtMoney(totalCusto)}</strong></td>
+          <td><strong>${fmtMoney(totalVenda)}</strong></td>
+          <td><strong>${fmtMoney(totalLucro)}</strong></td>
+          <td><strong>${fmtMoney(totalRecebido)}</strong></td>
+          <td><strong>${fmtMoney(totalPendente)}</strong></td>
+          <td></td>
+        </tr></tfoot>
       </table></div>`;
   }
   appEl.innerHTML = html;
